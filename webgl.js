@@ -23,6 +23,12 @@ Texture.prototype.fill = function (width, height, data) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
 };
 
+Texture.prototype.fill_u16 = function (width, height, data) {
+    var gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_SHORT, data);
+};
+
 function WebGLPlayer(canvas, options) {
     this.canvas = canvas;
     this.gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
@@ -114,6 +120,24 @@ WebGLPlayer.prototype.renderFrame = function (videoFrame, width, height, uOffset
     gl.y.fill(width, height, videoFrame.subarray(0, uOffset));
     gl.u.fill(width >> 1, height >> 1, videoFrame.subarray(uOffset, uOffset + vOffset));
     gl.v.fill(width >> 1, height >> 1, videoFrame.subarray(uOffset + vOffset, videoFrame.length));
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+};
+
+WebGLPlayer.prototype.renderFrame_u16 = function (videoFrame, width, height, uOffset, vOffset) {
+    if (!this.gl) {
+        console.log("[ER] Render frame failed due to WebGL not supported.");
+        return;
+    }
+
+    var gl = this.gl;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.y.fill_u16(width, height, videoFrame.subarray(0, uOffset));
+    gl.u.fill_u16(width >> 1, height >> 1, videoFrame.subarray(uOffset, uOffset + vOffset));
+    gl.v.fill_u16(width >> 1, height >> 1, videoFrame.subarray(uOffset + vOffset, videoFrame.length));
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 };

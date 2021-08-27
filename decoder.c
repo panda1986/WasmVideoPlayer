@@ -3,7 +3,7 @@
 #include <sys/timeb.h>
 #include <unistd.h>
 
-typedef void(*VideoCallback)(unsigned char *buff, int size, double timestamp);
+typedef void(*VideoCallback)(unsigned char *buff, int size, double timestamp, int usize);
 typedef void(*AudioCallback)(unsigned char *buff, int size, double timestamp);
 typedef void(*RequestCallback)(int offset, int available);
 
@@ -132,7 +132,7 @@ void ffmpegLogCallback(void* ptr, int level, const char* fmt, va_list vl) {
     char line[1024]			= { 0 };
     static int is_atty;
     AVClass* avc = ptr ? *(AVClass**)ptr : NULL;
-    if (level > AV_LOG_DEBUG) {
+    if (level > AV_LOG_TRACE) {
         return;
     }
 
@@ -218,7 +218,7 @@ void closeCodecContext(AVFormatContext *fmtCtx, AVCodecContext *decCtx, int stre
     } while (0);
 }
 
-ErrorCode copyYuvData(AVFrame *frame, unsigned char *buffer, int width, int height) {
+ErrorCode copyYuv420pData(AVFrame *frame, unsigned char *buffer, int width, int height) {
     ErrorCode ret		= kErrorCode_Success;
     unsigned char *src	= NULL;
     unsigned char *dst	= buffer;
@@ -226,11 +226,13 @@ ErrorCode copyYuvData(AVFrame *frame, unsigned char *buffer, int width, int heig
     do {
         if (frame == NULL || buffer == NULL) {
             ret = kErrorCode_Invalid_Param;
+            simpleLog("copyYuv420pData err, frame or buffer is null");
             break;
         }
 
         if (!frame->data[0] || !frame->data[1] || !frame->data[2]) {
             ret = kErrorCode_Invalid_Param;
+            simpleLog("copyYuv420pData err, frame has not 3 data item");
             break;
         }
 
@@ -249,6 +251,45 @@ ErrorCode copyYuvData(AVFrame *frame, unsigned char *buffer, int width, int heig
         for (i = 0; i < height / 2; i++) {
             src = frame->data[2] + i * frame->linesize[2];
             memcpy(dst, src, width / 2);
+            dst += width / 2;
+        }
+    } while (0);
+    return ret;	
+}
+
+ErrorCode copyYuv420p10Data(AVFrame *frame, unsigned char *u8_buffer, int width, int height) {
+    ErrorCode ret		= kErrorCode_Success;
+    unsigned short *src	= NULL;
+    unsigned short *dst	= (unsigned short *)u8_buffer;
+    int i = 0;
+    do {
+        if (frame == NULL || u8_buffer == NULL) {
+            ret = kErrorCode_Invalid_Param;
+            simpleLog("copyYuv420p10Data err, frame or buffer is null");
+            break;
+        }
+
+        if (!frame->data[0] || !frame->data[1] || !frame->data[2]) {
+            ret = kErrorCode_Invalid_Param;
+            simpleLog("copyYuv420p10Data err, frame has not 3 data item");
+            break;
+        }
+
+        for (i = 0; i < height; i++) {
+            src = frame->data[0] + i * frame->linesize[0];
+            memcpy(dst, src, width * sizeof(unsigned short));
+            dst += width;
+        }
+
+        for (i = 0; i < height / 2; i++) {
+            src = frame->data[1] + i * frame->linesize[1];
+            memcpy(dst, src, width);
+            dst += width / 2;
+        }
+
+        for (i = 0; i < height / 2; i++) {
+            src = frame->data[2] + i * frame->linesize[2];
+            memcpy(dst, src, width);
             dst += width / 2;
         }
     } while (0);
@@ -292,6 +333,8 @@ int roundUp(int numToRound, int multiple) {
 ErrorCode processDecodedVideoFrame(AVFrame *frame) {
     ErrorCode ret = kErrorCode_Success;
     double timestamp = 0.0f;
+    int usize = 1;
+    simpleLog("processDecodedVideoFrame,  t=%d", frame->pts);
     do {
         if (frame == NULL ||
             decoder->videoCallback == NULL ||
@@ -301,7 +344,30 @@ ErrorCode processDecodedVideoFrame(AVFrame *frame) {
             break;
         }
 
-        if (decoder->videoCodecContext->pix_fmt != AV_PIX_FMT_YUV420P) {
+        switch (decoder->videoCodecContext->pix_fmt) {
+        case AV_PIX_FMT_YUV420P:
+            usize = 1;
+            simpleLog("processDecodedVideoFrame, prepare to copyYuv420pData, usize=%d", usize);
+            ret = copyYuv420pData(frame, decoder->yuvBuffer, decoder->videoCodecContext->width, decoder->videoCodecContext->height);
+            simpleLog("processDecodedVideoFrame, copyYuv420pData finish, ret=%d", ret);
+            break;
+        case AV_PIX_FMT_YUV420P10LE:
+            usize = 2;
+            simpleLog("processDecodedVideoFrame, prepare to copyYuv420p10Data, usize=%d", usize);
+            ret = copyYuv420p10Data(frame, decoder->yuvBuffer, decoder->videoCodecContext->width, decoder->videoCodecContext->height);
+            simpleLog("processDecodedVideoFrame, copyYuv420p10Data finish, ret=%d", ret);
+            break;
+        default:
+            simpleLog("Not YUV420P, but unsupported format %d.", decoder->videoCodecContext->pix_fmt);
+            ret = kErrorCode_Invalid_Format;
+            break;
+        }
+
+        if (ret != kErrorCode_Success) {
+            break;
+        }
+        /*
+        if (decoder->videoCodecContext->pix_fmt != AV_PIX_FMT_YUV420P && decoder->videoCodecContext->pix_fmt != AV_PIX_FMT_YUV420P10LE ) {
             simpleLog("Not YUV420P, but unsupported format %d.", decoder->videoCodecContext->pix_fmt);
             ret = kErrorCode_Invalid_Format;
             break;
@@ -311,8 +377,7 @@ ErrorCode processDecodedVideoFrame(AVFrame *frame) {
         if (ret != kErrorCode_Success) {
             break;
         }
-
-        /*
+        
         ret = yuv420pToRgb32(decoder->yuvBuffer, decoder->rgbBuffer, decoder->videoCodecContext->width, decoder->videoCodecContext->height);
         if (ret != kErrorCode_Success) {
             break;
@@ -322,11 +387,11 @@ ErrorCode processDecodedVideoFrame(AVFrame *frame) {
         timestamp = (double)frame->pts * av_q2d(decoder->avformatContext->streams[decoder->videoStreamIdx]->time_base);
 
         if (decoder->accurateSeek && timestamp < decoder->beginTimeOffset) {
-            //simpleLog("video timestamp %lf < %lf", timestamp, decoder->beginTimeOffset);
+            simpleLog("video timestamp %lf < %lf", timestamp, decoder->beginTimeOffset);
             ret = kErrorCode_Old_Frame;
             break;
         }
-        decoder->videoCallback(decoder->yuvBuffer, decoder->videoSize, timestamp);
+        decoder->videoCallback(decoder->yuvBuffer, decoder->videoSize, timestamp, usize);
     } while (0);
     return ret;
 }
@@ -411,6 +476,7 @@ ErrorCode decodePacket(AVPacket *pkt, int *decodedLen) {
         codecContext = decoder->audioCodecContext;
         isVideo = 0;
     } else {
+        simpleLog("decodePacket error, invalid data");
         return kErrorCode_Invalid_Data;
     }
 
@@ -687,6 +753,7 @@ ErrorCode openDecoder(int *paramArray, int paramCount, long videoCallback, long 
 
         av_register_all();
         avcodec_register_all();
+        simpleLog("register all success");
 
         if (logLevel == kLogLevel_All) {
             av_log_set_callback(ffmpegLogCallback);
@@ -694,6 +761,7 @@ ErrorCode openDecoder(int *paramArray, int paramCount, long videoCallback, long 
         
         decoder->avformatContext = avformat_alloc_context();
         decoder->customIoBuffer = (unsigned char*)av_mallocz(kCustomIoBufferSize);
+        simpleLog("avformat_alloc_context success, ma");
 
         AVIOContext* ioContext = avio_alloc_context(
             decoder->customIoBuffer,
@@ -708,12 +776,14 @@ ErrorCode openDecoder(int *paramArray, int paramCount, long videoCallback, long 
             simpleLog("avio_alloc_context failed.");
             break;
         }
+        simpleLog("avio_alloc_context success");
 
         decoder->avformatContext->pb = ioContext;
         decoder->avformatContext->flags = AVFMT_FLAG_CUSTOM_IO;
 
         r = avformat_open_input(&decoder->avformatContext, NULL, NULL, NULL);
         if (r != 0) {
+            simpleLog("avformat_open_input failed, r=%d", r);
             ret = kErrorCode_FFmpeg_Error;
             char err_info[32] = { 0 };
             av_strerror(ret, err_info, 32);
@@ -803,7 +873,7 @@ ErrorCode openDecoder(int *paramArray, int paramCount, long videoCallback, long 
             decoder->videoCodecContext->height);
 
         decoder->videoBufferSize = 3 * decoder->videoSize;
-        decoder->yuvBuffer = (unsigned char *)av_mallocz(decoder->videoBufferSize);
+        decoder->yuvBuffer = (void *)av_mallocz(decoder->videoBufferSize);
         decoder->avFrame = av_frame_alloc();
         
         params[0] = 1000 * (decoder->avformatContext->duration + 5000) / AV_TIME_BASE;
@@ -954,6 +1024,8 @@ ErrorCode decodeOnePacket() {
         } while (packet.size > 0);
     } while (0);
     av_packet_unref(&packet);
+
+    simpleLog("decodeOnePacket, ret=%d", ret);
     return ret;
 }
 

@@ -520,7 +520,7 @@ Player.prototype.onGetFileInfo = function (info) {
 };
 
 Player.prototype.onFileData = function (data, start, end, seq) {
-    //this.logger.logInfo("Got data bytes=" + start + "-" + end + ".");
+    this.logger.logInfo("Got data bytes=" + start + "-" + end + ".");
     this.downloading = false;
 
     if (this.playerState == playerStateIdle) {
@@ -733,10 +733,10 @@ Player.prototype.bufferFrame = function (frame) {
         return;
     }
     this.frameBuffer.push(frame);
-    //this.logger.logInfo("bufferFrame " + frame.s + ", seq " + frame.q);
+    this.logger.logInfo("bufferFrame " + frame.s + ", seq " + frame.q);
     if (this.getBufferTimerLength() >= maxBufferTimeLength || this.decoderState == decoderStateFinished) {
         if (this.decoding) {
-            //this.logger.logInfo("Frame buffer time length >= " + maxBufferTimeLength + ", pause decoding.");
+            this.logger.logInfo("Frame buffer time length >= " + maxBufferTimeLength + ", pause decoding.");
             this.pauseDecoding();
         }
         if (this.buffering) {
@@ -807,11 +807,16 @@ Player.prototype.displayVideoFrame = function (frame) {
     var audioTimestamp = audioCurTs + this.beginTimeOffset;
     var delay = frame.s - audioTimestamp;
 
-    //this.logger.logInfo("displayVideoFrame delay=" + delay + "=" + " " + frame.s  + " - (" + audioCurTs  + " + " + this.beginTimeOffset + ")" + "->" + audioTimestamp);
+    this.logger.logInfo("displayVideoFrame delay=" + delay + "=" + " " + frame.s  + " - (" + audioCurTs  + " + " + this.beginTimeOffset + ")" + "->" + audioTimestamp);
 
     if (audioTimestamp <= 0 || delay <= 0) {
-        var data = new Uint8Array(frame.d);
-        this.renderVideoFrame(data);
+        if (frame.u == 1) {
+            var data = new Uint8Array(frame.d);
+            this.renderVideoFrame(data);
+        } else if (frame.u == 2) {
+            var data = new Uint16Array(frame.d);
+            this.renderVideoFrame_u16(data);
+        }
         return true;
     }
     return false;
@@ -892,7 +897,7 @@ Player.prototype.displayLoop = function() {
 
     if (this.getBufferTimerLength() < maxBufferTimeLength / 2) {
         if (!this.decoding) {
-            //this.logger.logInfo("Buffer time length < " + maxBufferTimeLength / 2 + ", restart decoding.");
+            this.logger.logInfo("Buffer time length < " + maxBufferTimeLength / 2 + ", restart decoding.");
             this.startDecoding();
         }
     }
@@ -921,6 +926,10 @@ Player.prototype.stopBuffering = function () {
 
 Player.prototype.renderVideoFrame = function (data) {
     this.webglPlayer.renderFrame(data, this.videoWidth, this.videoHeight, this.yLength, this.uvLength);
+};
+
+Player.prototype.renderVideoFrame_u16 = function (data) {
+    this.webglPlayer.renderFrame_u16(data, this.videoWidth, this.videoHeight, this.yLength, this.uvLength);
 };
 
 Player.prototype.downloadOneChunk = function () {
