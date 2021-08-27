@@ -9,7 +9,7 @@ self.importScripts("libffmpeg.js");
 
 function Decoder() {
     this.logger             = new Logger("Decoder");
-    this.coreLogLevel       = 1;
+    this.coreLogLevel       = 2; // when debug, use 2, else use 1
     this.accurateSeek       = true;
     this.wasmLoaded         = false;
     this.tmpReqQue          = [];
@@ -153,7 +153,7 @@ Decoder.prototype.seekTo = function (ms) {
 };
 
 Decoder.prototype.processReq = function (req) {
-    //this.logger.logInfo("processReq " + req.t + ".");
+    this.logger.logInfo("processReq " + req.t + ".");
     switch (req.t) {
         case kInitDecoderReq:
             this.initDecoder(req.s, req.c);
@@ -194,15 +194,29 @@ Decoder.prototype.onWasmLoaded = function () {
     this.logger.logInfo("Wasm loaded.");
     this.wasmLoaded = true;
 
-    this.videoCallback = Module.addFunction(function (buff, size, timestamp) {
-        var outArray = Module.HEAPU8.subarray(buff, buff + size);
-        var data = new Uint8Array(outArray);
-        var objData = {
-            t: kVideoFrame,
-            s: timestamp,
-            d: data
-        };
-        self.postMessage(objData, [objData.d.buffer]);
+    this.videoCallback = Module.addFunction(function (buff, size, timestamp, usize) {
+        if (usize == 1) {
+            var outArray = Module.HEAPU8.subarray(buff, buff + size);
+            var data = new Uint8Array(outArray);
+            var objData = {
+                t: kVideoFrame,
+                u: usize,
+                s: timestamp,
+                d: data
+            };
+            self.postMessage(objData, [objData.d.buffer]);
+        } else if (usize == 2) {
+            var outArray = Module.HEAPU16.subarray(buff, buff + size);
+            var data = new Uint16Array(outArray);
+            var objData = {
+                t: kVideoFrame,
+                u: usize,
+                s: timestamp,
+                d: data
+            };
+            self.postMessage(objData, [objData.d.buffer]);
+        }
+        
     }, 'viid');
 
     this.audioCallback = Module.addFunction(function (buff, size, timestamp) {
